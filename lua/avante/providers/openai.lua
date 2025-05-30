@@ -217,9 +217,43 @@ function M:add_thinking_message(ctx, text, state, opts)
   if opts.on_messages_add then opts.on_messages_add({ msg }) end
 end
 
+-- helper to trim/sanitize any trailing junk from the JSON string
+local function sanitize_json(str)
+  if not str then return "" end
+  -- 1) Trim surrounding whitespace
+  str = str:match("^%s*(.-)%s*$")
+  -- 2) Crop anything after the last closing brace
+  do
+    local up_to_last = str:match("^(.*})")
+    if up_to_last then
+      str = up_to_last
+    end
+  end
+  -- 3) Remove trailing commas before ] or }
+  str = str:gsub(",%s*([}%]])", "%1")
+  return str
+end
+
 function M:add_tool_use_message(tool_use, state, opts)
   local jsn = nil
-  if state == "generated" then jsn = vim.json.decode(tool_use.input_json) end
+  if state == "generated" then
+    local raw = tool_use.input_json or ""
+    local clean = sanitize_json(raw)
+    local ok, dec = pcall(vim.json.decode, clean)
+     if not ok then
+        vim.api.nvim_err_writeln("avante.nvim: raw input_json:\n" .. raw)
+        clean = raw:gsub("}%s*$", "")   -- removes a single final `}` if present
+        clean = raw:gsub("</tool_call>%s*$", "")
+        ok, dec = pcall(vim.json.decode, clean)
+      end
+    if not ok then
+      -- first, print the *entire* raw payload so you can inspect it:
+      vim.api.nvim_err_writeln("avante.nvim: again clean input_json:\n" .. clean)
+      error(("avante.nvim: malformed JSON in tool_use:\n%s\nParse error: %s")
+        :format(block, dec))
+    end
+    jsn = dec
+  end
   local msg = HistoryMessage:new({
     role = "assistant",
     content = {
